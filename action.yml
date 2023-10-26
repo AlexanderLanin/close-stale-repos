@@ -1,9 +1,13 @@
-name: 'The name of your action here'
-description: 'Provide a description here'
-author: 'Your name or organization here'
+name: 'close-stale-repos'
+description: 'Identify stale repositories and report them'
+author: 'Alexander Lanin'
 
-# Define your inputs here.
 inputs:
+  organization:
+    description: 'Which organization to check; defaults to the current organization'
+    default: ${{ github.repository_owner }}
+    required: true
+
   milliseconds:
     description: 'Your input description here'
     required: true
