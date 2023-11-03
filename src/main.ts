@@ -2,9 +2,7 @@ import * as core from '@actions/core'
 import { CachedOctokit } from './cached-octokit'
 import assert from 'assert'
 import { Cache } from 'file-system-cache'
-import { Octokit } from 'octokit'
-import { Repository } from '@octokit/graphql-schema'
-import { Commit } from '@octokit/graphql-schema'
+import { Commit, Repository } from '@octokit/graphql-schema'
 
 type AffiliatedUser = {
   login: string
@@ -29,8 +27,6 @@ type StaleRepository = {
  */
 export async function run(): Promise<void> {
   try {
-    const ms: string = core.getInput('milliseconds')
-
     // Note: when this runs as a GitHub Action, the .cache directory will not be persisted.
     // This is to facilitate rapid iterations during development.
     const cache = new Cache({
@@ -42,7 +38,7 @@ export async function run(): Promise<void> {
     const token = core.getInput('token')
     const octokit = new CachedOctokit(cache, { auth: token, log: console })
 
-    const org_admins = await get_repository_admins(
+    const admins = await get_repository_admins(
       octokit,
       'SoftwareDefinedVehicle'
     )
@@ -55,23 +51,14 @@ export async function run(): Promise<void> {
       console.log(``)
       console.log(`Last updated: ${repository.updatedAt}`)
       console.log(`Last pushed: ${repository.pushedAt}`)
-      console.log(`Latest release: ${repository.latestRelease?.createdAt}`)
-      console.log(`Last Commits:`)
-      for (const commit of repository.defaultBranchRef?.target.history.nodes) {
-        if (!commit.author.email.includes('noreply.github.com')) {
-          console.log(
-            `* ${commit.committedDate} - ${commit.author.name} <${commit.author.email}>`
-          )
-        } else {
-          console.log(`* ${commit.committedDate} - ${commit.author.name}`)
-        }
-      }
+      console.log(`Latest release: ${repository.latestRelease}`)
 
       console.log('\n')
-      console.log(`Collaborators (assigned directly by name):`)
-      for (const collaborator of repository.collaborators.edges) {
+      console.log(`Collaborators:`)
+      for (const collaborator of repository.affiliations) {
         console.log(
-          `* ${collaborator.node.name} <${collaborator.node.login}, ${collaborator.node.email}> - ${collaborator.permission}`
+          `* ${collaborator.login} (${collaborator.name}) <${collaborator.email}>` +
+            ` (${collaborator.permission}) via (${collaborator.affiliation})`
         )
       }
       console.log('\n')
@@ -88,15 +75,53 @@ export async function run(): Promise<void> {
     if (error instanceof Error) core.setFailed(error.message)
     else core.setFailed('An unknown error occurred')
   }
+  return
 }
 
-function one_year_ago() {
-  var one_year_ago = new Date()
-  one_year_ago.setFullYear(one_year_ago.getFullYear() - 1)
-  return one_year_ago.toISOString().substring(0, 10)
+function one_year_ago(): string {
+  const date = new Date()
+  date.setFullYear(date.getFullYear() - 1)
+  return date.toISOString().substring(0, 10)
 }
 
-async function get_stale_repos(octokit: CachedOctokit, org: string) {
+async function get_repository_admins(
+  octokit: CachedOctokit,
+  org: string
+): Promise<AffiliatedUser[]> {
+  const { data: orgMembers } = await octokit.request_cached(
+    'GET /orgs/{org}/members',
+    {
+      org,
+      role: 'admin'
+    }
+  )
+
+  const admins: AffiliatedUser[] = []
+
+  for (const member of orgMembers) {
+    const { data: user } = await octokit.request_cached(
+      'GET /users/{username}',
+      {
+        username: member.login
+      }
+    )
+
+    admins.push({
+      login: user.login,
+      name: user.name ?? '',
+      email: user.email ?? '',
+      permission: 'admin',
+      affiliation: 'OWNER'
+    })
+  }
+
+  return admins
+}
+
+async function get_stale_repos(
+  octokit: CachedOctokit,
+  org: string
+): Promise<StaleRepository[]> {
   const stale_date = one_year_ago()
 
   // Sanitize to avoid any kind of injection
@@ -166,64 +191,64 @@ async function get_stale_repos(octokit: CachedOctokit, org: string) {
   }
   `
   const graph = await octokit.graphql_cached(graphql_query, {
-    search_query: search_query,
+    search_query,
     limit: 15
   })
-  const repositories: Repository[] = graph.search.edges.map(
-    (edge: { node: any }) => edge.node
+
+  const stale_repos: StaleRepository[] = []
+  for (const edge of graph.search.edges) {
+    stale_repos.push(extract_stale_repository_data(edge.node))
+  }
+  return stale_repos
+}
+
+function extract_stale_repository_data(
+  repository: Repository
+): StaleRepository {
+  assert.strictEqual(
+    repository.isArchived,
+    false,
+    `Repository ${repository.name} is archived`
+  )
+  assert.strictEqual(
+    repository.isDisabled,
+    false,
+    `Repository ${repository.name} is disabled`
   )
 
-  var stale_repos: StaleRepository[] = []
-
-  // iterate repositories
-  for (const repository of repositories) {
-    assert.strictEqual(
-      repository.isArchived,
-      false,
-      `Repository ${repository.name} is archived`
-    )
-    assert.strictEqual(
-      repository.isDisabled,
-      false,
-      `Repository ${repository.name} is disabled`
-    )
-
-    var stale_repo: StaleRepository = {
-      name: repository.name,
-      description: repository.description || '',
-      updatedAt: repository.updatedAt,
-      pushedAt: repository.pushedAt,
-      latestRelease: repository.latestRelease?.createdAt,
-      affiliations: []
-    }
-
-    for (const commit of (repository.defaultBranchRef?.target as Commit)
-      ?.history?.nodes || []) {
-      if (commit?.author?.user) {
-        stale_repo.affiliations.push({
-          login: commit.author.user.login,
-          name: commit.author.user.name || '',
-          email: commit.author.user.email || '',
-          permission: '',
-          affiliation: 'recent commiter'
-        })
-      }
-
-      if (repository.collaborators?.edges) {
-        for (const collaborator of repository.collaborators.edges) {
-          if (collaborator?.node) {
-            stale_repo.affiliations.push({
-              login: collaborator.node.login,
-              name: collaborator.node.name || '',
-              email: collaborator.node.email || '',
-              permission: collaborator.permission || '',
-              affiliation: 'direct collaborator'
-            })
-          }
-        }
-      }
-    }
-
-    return stale_repos
+  const stale_repo: StaleRepository = {
+    name: repository.name,
+    description: repository.description || '',
+    updatedAt: repository.updatedAt,
+    pushedAt: repository.pushedAt,
+    latestRelease: repository.latestRelease?.createdAt,
+    affiliations: []
   }
+
+  for (const commit of (repository.defaultBranchRef?.target as Commit)?.history
+    ?.nodes || []) {
+    if (commit?.author?.user) {
+      stale_repo.affiliations.push({
+        login: commit.author.user.login,
+        name: commit.author.user.name ?? '',
+        email: commit.author.user.email,
+        permission: '',
+        affiliation: 'recent commiter'
+      })
+    }
+  }
+
+  for (const collaborator of repository.collaborators?.edges || []) {
+    if (collaborator) {
+      stale_repo.affiliations.push({
+        login: collaborator.node.login,
+        name: collaborator.node.name ?? '',
+        email: collaborator.node.email ?? '',
+        permission: collaborator.permission ?? '',
+        affiliation: 'collaborator'
+      })
+    }
+  }
+
+  return stale_repo
 }

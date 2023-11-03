@@ -1,6 +1,7 @@
 import { Cache } from 'file-system-cache'
-import { App, Octokit } from 'octokit'
-import { throttling } from '@octokit/plugin-throttling'
+import { Octokit } from 'octokit'
+import type { RequestParameters } from '@octokit/types'
+import type { OctokitOptions } from '@octokit/core/dist-types/types'
 
 export class CachedOctokit extends Octokit {
   cache: Cache
@@ -8,7 +9,7 @@ export class CachedOctokit extends Octokit {
   hits: number
   misses: number
 
-  constructor(cache: Cache, octokit_options: Octokit.Options) {
+  constructor(cache: Cache, octokit_options: OctokitOptions) {
     super(octokit_options)
     this.cache = cache
     this.extra_cache_keys = JSON.stringify(octokit_options || [])
@@ -17,7 +18,11 @@ export class CachedOctokit extends Octokit {
     this.misses = 0
   }
 
-  async graphql_cached(query, parameters, retention_in_seconds = 3600) {
+  async graphql_cached(
+    query: string,
+    parameters: RequestParameters | undefined,
+    retention_in_seconds = 3600
+  ): Promise<any> {
     const cache_key = JSON.stringify({
       query,
       parameters,
@@ -39,7 +44,11 @@ export class CachedOctokit extends Octokit {
     }
   }
 
-  async request_cached(route, options, retention_in_seconds = 3600) {
+  async request_cached(
+    route: string,
+    options: RequestParameters | undefined,
+    retention_in_seconds = 3600
+  ): Promise<any> {
     const cache_key = JSON.stringify({
       route,
       options,
@@ -61,7 +70,7 @@ export class CachedOctokit extends Octokit {
     }
   }
 
-  print_cache_stats() {
+  print_cache_stats(): void {
     console.log()
     console.log('cache stats:')
     console.log('  hits:', this.hits)
