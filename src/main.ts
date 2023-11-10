@@ -47,7 +47,11 @@ export async function run(): Promise<void> {
 
     octokit.print_cache_stats()
   } catch (error) {
-    core.setFailed(`${(error as any)?.message ?? error}`)
+    if (error instanceof Error) {
+      core.setFailed(error.message)
+    } else {
+      core.setFailed('Error: ' + (error as string))
+    }
   }
   return
 }
