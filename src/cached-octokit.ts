@@ -2,6 +2,7 @@ import { Cache } from 'file-system-cache'
 import { Octokit } from 'octokit'
 import type { RequestParameters } from '@octokit/types'
 import type { OctokitOptions } from '@octokit/core/dist-types/types'
+import { assert } from 'console'
 
 export class CachedOctokit extends Octokit {
   cache: Cache
@@ -10,7 +11,9 @@ export class CachedOctokit extends Octokit {
   misses: number
 
   constructor(cache: Cache, octokit_options: OctokitOptions) {
+    console.debug('creating CachedOctokit')
     super(octokit_options)
+    assert(super.request)
     this.cache = cache
     this.extra_cache_keys = JSON.stringify(octokit_options || [])
 
@@ -49,6 +52,8 @@ export class CachedOctokit extends Octokit {
     options: RequestParameters | undefined,
     retention_in_seconds = 3600
   ): Promise<any> {
+    assert(super.request)
+
     const cache_key = JSON.stringify({
       route,
       options,

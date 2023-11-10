@@ -40554,13 +40554,16 @@ function wrappy (fn, cb) {
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.CachedOctokit = void 0;
 const octokit_1 = __nccwpck_require__(57467);
+const console_1 = __nccwpck_require__(96206);
 class CachedOctokit extends octokit_1.Octokit {
     cache;
     extra_cache_keys;
     hits;
     misses;
     constructor(cache, octokit_options) {
+        console.debug('creating CachedOctokit');
         super(octokit_options);
+        (0, console_1.assert)(super.request);
         this.cache = cache;
         this.extra_cache_keys = JSON.stringify(octokit_options || []);
         this.hits = 0;
@@ -40586,6 +40589,7 @@ class CachedOctokit extends octokit_1.Octokit {
         }
     }
     async request_cached(route, options, retention_in_seconds = 3600) {
+        (0, console_1.assert)(super.request);
         const cache_key = JSON.stringify({
             route,
             options,
@@ -40647,87 +40651,82 @@ var __importStar = (this && this.__importStar) || function (mod) {
     return result;
 };
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.getInputs = void 0;
+exports.getInputs = exports.parseInputs = void 0;
 const core = __importStar(__nccwpck_require__(42186));
 (__nccwpck_require__(12437).config)();
+async function parseInputs(inputs) {
+    const result = {};
+    result.github_server = parse_url(inputs.github_server);
+    result.organization = parse_simple_string(inputs.organization);
+    result.token = parse_simple_string(inputs.token);
+    result.stale_date = calculate_stale_date(parse_positive_number(inputs.days_until_stale));
+    result.cache_path = inputs.cache_path[1];
+    result.cache_ttl_seconds = parse_positive_number(inputs.cache_ttl_seconds);
+    for (const [key, value] of Object.entries(result)) {
+        core.debug(`Parsed Input: ${key} = ${value}`);
+    }
+    return result;
+}
+exports.parseInputs = parseInputs;
 async function getInputs() {
     const result = {};
-    result.github_server = get('github-server-url', validate_valid_url);
-    result.token = get('token', validate_simple_string);
-    result.cache_path = get('cache_path', undefined, undefined, '.cache');
-    result.cache_ttl_seconds = get('cache_ttl_seconds', validate_positive_number, undefined, 3600);
-    result.stale_date = calculate_stale_date(get('days_until_stale', validate_positive_number, undefined, 365));
-    let organization = get('organization', validate_simple_string, ['GITHUB_REPOSITORY_OWNER'], '');
-    if (organization === '') {
-        organization = process.env['GITHUB_REPOSITORY'].split('/')[0];
-        validate_simple_string('organization', organization);
+    result.github_server = get('github-server-url');
+    result.organization = get('organization', '', 'GITHUB_REPOSITORY_OWNER');
+    if (!result.organization[1])
+        result.organization[1] = process.env['GITHUB_REPOSITORY'].split('/')[0];
+    result.token = get('token');
+    result.days_until_stale = get('days_until_stale', '365');
+    result.cache_path = get('cache_path', '.cache');
+    result.cache_ttl_seconds = get('cache_ttl_seconds', '3600');
+    for (const [key, value] of Object.entries(result)) {
+        core.debug(`Raw Input: ${value[0]} = ${value[1]}`);
     }
-    result.organization = organization;
-    core.debug(`Inputs: ${JSON.stringify(result)}`);
     return result;
 }
 exports.getInputs = getInputs;
-function get_input(name, alternative_names_in_env) {
+function get(name, default_value, alternative_name_in_env) {
+    const name_in_env = name.toUpperCase().replace(/-/g, '_');
+    const readable_name = alternative_name_in_env
+        ? `${name} (${name_in_env} or ${alternative_name_in_env})`
+        : `${name} (${name_in_env})`;
+    // try to get the value from the input
     const value = core.getInput(name);
-    if (value === '') {
-        const envName = name.toUpperCase().replace(/-/g, '_');
-        if (process.env[envName]) {
-            return process.env[envName];
-        }
-        if (alternative_names_in_env) {
-            for (const name of alternative_names_in_env) {
-                if (process.env[name]) {
-                    return process.env[name];
-                }
-            }
-        }
-        return undefined;
+    if (value !== '')
+        return [readable_name, value];
+    // Fall back to env vars
+    if (process.env[name_in_env])
+        return [readable_name, process.env[name_in_env]];
+    // Fall back to alternative env vars
+    if (alternative_name_in_env && process.env[alternative_name_in_env])
+        return [readable_name, process.env[alternative_name_in_env]];
+    // No value found. If a default value was provided, return that.
+    if (default_value !== undefined)
+        return [readable_name, default_value];
+    throw Error(`Missing required input: ${name}`);
+}
+/// "simple" means that the string must be alphanumeric with dashes
+function parse_simple_string(p) {
+    const [name, value] = p;
+    const organizationRegex = /^[a-zA-Z0-9_-]+$/;
+    if (!organizationRegex.test(value)) {
+        throw Error(`Invalid value for ${name}, must be alphanumeric with dashes. Value: ${value}`);
     }
     else {
         return value;
     }
 }
-function get(name, validator, alternative_names_in_env, default_value) {
-    // From now on value is not empty, but may be undefined.
-    // Let's inform the compiler:
-    const value = get_input(name, alternative_names_in_env);
-    if (!value) {
-        if (default_value !== undefined) {
-            return default_value;
-        }
-        else {
-            throw Error(`Input required and not supplied: ${name} (or env:${alternative_names_in_env}))`);
-        }
-    }
-    else {
-        if (validator) {
-            return validator(name, value);
-        }
-        else {
-            return value;
-        }
-    }
-}
-function validate_simple_string(name, organization) {
-    const organizationRegex = /^[a-zA-Z0-9_-]+$/;
-    if (!organizationRegex.test(organization)) {
-        throw Error('Invalid organization syntax, must be alphanumeric with dashes');
-    }
-    else {
-        return organization;
-    }
-}
-function validate_valid_url(name, url) {
+function parse_url(p) {
+    const [name, value] = p;
     try {
-        new URL(url);
-        return name;
+        return new URL(value);
     }
     catch (error) {
-        throw Error(`Invalid ${name}, must be a valid URL. Value: ${url}`);
+        throw Error(`Invalid ${name}, must be a valid URL. But it is: ${value}`);
     }
 }
-function validate_positive_number(name, value) {
-    const int_value = parseInt(value.toString());
+function parse_positive_number(p) {
+    const [name, value] = p;
+    const int_value = parseInt(value);
     if (isNaN(int_value) || int_value < 1) {
         throw Error(`Invalid ${name}, must be a positive number. Value: ${value}`);
     }
@@ -40788,8 +40787,9 @@ const input_helper = __importStar(__nccwpck_require__(46455));
  */
 async function run() {
     try {
-        const parameters = await input_helper.getInputs();
+        const parameters = await input_helper.parseInputs(await input_helper.getInputs());
         const octokit = await create_octokit(parameters);
+        (0, assert_1.default)(octokit.request, 'octokit.request is undefined (1)');
         const admins = await get_organization_admins(octokit, parameters.organization);
         console.log(`Admins: ${admins.map(m => m.login).join(', ')}`);
         const stale_repos = await get_stale_repos(octokit, parameters.organization, parameters.stale_date);
@@ -40798,7 +40798,8 @@ async function run() {
     }
     catch (error) {
         if (error instanceof Error) {
-            core.setFailed(error.message);
+            core.setFailed('Error: ' + error.message);
+            console.log(error.stack);
         }
         else {
             core.setFailed('Error: ' + error);
@@ -40820,6 +40821,7 @@ async function create_octokit(parameters) {
         auth: parameters.token,
         log: console
     });
+    (0, assert_1.default)(octokit.request, 'octokit.request is undefined');
     return octokit;
 }
 async function print_stale_repos(stale_repos) {
@@ -40987,6 +40989,14 @@ module.exports = require("assert");
 
 "use strict";
 module.exports = require("buffer");
+
+/***/ }),
+
+/***/ 96206:
+/***/ ((module) => {
+
+"use strict";
+module.exports = require("console");
 
 /***/ }),
 

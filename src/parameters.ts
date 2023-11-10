@@ -1,5 +1,5 @@
 export interface IParameters {
-  github_server: string
+  github_server: URL
   organization: string
   token: string
 

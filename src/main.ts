@@ -29,8 +29,11 @@ type StaleRepository = {
  */
 export async function run(): Promise<void> {
   try {
-    const parameters = await input_helper.getInputs()
+    const parameters = await input_helper.parseInputs(
+      await input_helper.getInputs()
+    )
     const octokit = await create_octokit(parameters)
+    assert(octokit.request, 'octokit.request is undefined (1)')
 
     const admins = await get_organization_admins(
       octokit,
@@ -48,7 +51,8 @@ export async function run(): Promise<void> {
     octokit.print_cache_stats()
   } catch (error) {
     if (error instanceof Error) {
-      core.setFailed(error.message)
+      core.setFailed('Error: ' + error.message)
+      console.log(error.stack)
     } else {
       core.setFailed('Error: ' + (error as string))
     }
@@ -72,6 +76,7 @@ async function create_octokit(parameters: IParameters): Promise<CachedOctokit> {
     log: console
   })
 
+  assert(octokit.request, 'octokit.request is undefined')
   return octokit
 }
 

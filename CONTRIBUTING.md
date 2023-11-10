@@ -17,10 +17,10 @@ npm run lint
 
 ### Testing:
 ```bash
-npm run build && npm run test
+npm run test
 ```
 
 ### Running:
 ```bash
-npm run build && npm run run
+npm run run
 ```
