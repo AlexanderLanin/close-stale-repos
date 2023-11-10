@@ -40297,6 +40297,98 @@ exports.CachedOctokit = CachedOctokit;
 
 /***/ }),
 
+/***/ 46455:
+/***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
+
+"use strict";
+
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || function (mod) {
+    if (mod && mod.__esModule) return mod;
+    var result = {};
+    if (mod != null) for (var k in mod) if (k !== "default" && Object.prototype.hasOwnProperty.call(mod, k)) __createBinding(result, mod, k);
+    __setModuleDefault(result, mod);
+    return result;
+};
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.getInputs = void 0;
+const core = __importStar(__nccwpck_require__(42186));
+async function getInputs() {
+    const result = {};
+    result.github_server = get_input('github-server-url', false);
+    if (result.github_server === '') {
+        result.github_server = process.env['GITHUB_SERVER_URL'];
+    }
+    validate_valid_url('github-server-url', result.github_server);
+    result.organization = get_input('organization', false);
+    if (result.organization === '') {
+        result.organization = process.env['GITHUB_REPOSITORY_OWNER'];
+    }
+    validate_organization_syntax(result.organization);
+    result.token = get_input('token');
+    validate_token_syntax(result.token);
+    const days_until_stale = parseInt(get_input('days_until_stale'));
+    validate_positive_number('days_until_stale', days_until_stale);
+    result.stale_date = calculate_stale_date(days_until_stale);
+    result.cache_path = get_input('cache_path');
+    result.cache_ttl_seconds = parseInt(get_input('cache_ttl_seconds'));
+    validate_positive_number('cache_ttl_seconds', result.cache_ttl_seconds);
+    core.debug(`Inputs: ${JSON.stringify(result)}`);
+    return result;
+}
+exports.getInputs = getInputs;
+function get_input(name, required = true) {
+    return core.getInput(name, { required: required });
+}
+function validate_organization_syntax(organization) {
+    const organizationRegex = /^[a-zA-Z0-9-]+$/;
+    if (!organizationRegex.test(organization)) {
+        throw Error('Invalid organization syntax, must be alphanumeric with dashes');
+    }
+}
+function validate_token_syntax(token) {
+    const tokenRegex = /^[a-f0-9]{40}$/;
+    if (!tokenRegex.test(token)) {
+        throw Error('Invalid token syntax, must be 40 characters of [a-f0-9]');
+    }
+}
+function validate_valid_url(name, url) {
+    try {
+        new URL(url);
+    }
+    catch (error) {
+        throw Error(`Invalid ${name}, must be a valid URL. Value: ${url}`);
+    }
+}
+function validate_positive_number(name, value) {
+    if (isNaN(value) || value < 1) {
+        throw Error(`Invalid ${name}, must be a positive number. Value: ${value}`);
+    }
+}
+function calculate_stale_date(days_until_stale) {
+    const date = new Date();
+    date.setDate(date.getDate() - days_until_stale);
+    return date.toISOString().substring(0, 10);
+}
+
+
+/***/ }),
+
 /***/ 70399:
 /***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
 
@@ -40334,60 +40426,61 @@ const core = __importStar(__nccwpck_require__(42186));
 const cached_octokit_1 = __nccwpck_require__(27068);
 const assert_1 = __importDefault(__nccwpck_require__(39491));
 const file_system_cache_1 = __nccwpck_require__(47232);
+const input_helper = __importStar(__nccwpck_require__(46455));
 /**
  * The main function for the action.
  * @returns {Promise<void>} Resolves when the action is complete.
  */
 async function run() {
     try {
-        // Note: when this runs as a GitHub Action, the .cache directory will not be persisted.
-        // This is to facilitate rapid iterations during development.
-        const cache = new file_system_cache_1.Cache({
-            basePath: '.cache',
-            ns: 'close-stale-repos',
-            ttl: 3600 // 1 hour
-        });
-        const token = core.getInput('token');
-        const octokit = new cached_octokit_1.CachedOctokit(cache, { auth: token, log: console });
-        const admins = await get_repository_admins(octokit, 'SoftwareDefinedVehicle');
+        const parameters = await input_helper.getInputs();
+        const octokit = await create_octokit(parameters);
+        const admins = await get_organization_admins(octokit, parameters.organization);
         console.log(`Admins: ${admins.map(m => m.login).join(', ')}`);
-        const stale_repos = await get_stale_repos(octokit, 'SoftwareDefinedVehicle');
-        for (const repository of stale_repos) {
-            console.log(`# ${repository.name}`);
-            console.log(`_${repository.description}_`);
-            console.log(``);
-            console.log(`Last updated: ${repository.updatedAt}`);
-            console.log(`Last pushed: ${repository.pushedAt}`);
-            console.log(`Latest release: ${repository.latestRelease}`);
-            console.log('\n');
-            console.log(`Collaborators:`);
-            for (const collaborator of repository.affiliations) {
-                console.log(`* ${collaborator.login} (${collaborator.name}) <${collaborator.email}>` +
-                    ` (${collaborator.permission}) via (${collaborator.affiliation})`);
-            }
-            console.log('\n');
-            console.log('\n\n');
-        }
+        const stale_repos = await get_stale_repos(octokit, parameters.organization, parameters.stale_date);
+        await print_stale_repos(stale_repos);
         octokit.print_cache_stats();
-        // Set outputs for other workflow steps to use
-        // core.setOutput('time', new Date().toTimeString())
     }
     catch (error) {
-        // Fail the workflow run if an error occurs
-        if (error instanceof Error)
-            core.setFailed(error.message);
-        else
-            core.setFailed('An unknown error occurred');
+        core.setFailed(`${error?.message ?? error}`);
     }
     return;
 }
 exports.run = run;
-function one_year_ago() {
-    const date = new Date();
-    date.setFullYear(date.getFullYear() - 1);
-    return date.toISOString().substring(0, 10);
+run();
+async function create_octokit(parameters) {
+    // Note: when this runs as a GitHub Action, the cache directory will not be persisted.
+    // This is to facilitate rapid iterations during development.
+    const cache = new file_system_cache_1.Cache({
+        basePath: parameters.cache_path,
+        ns: 'close-stale-repos',
+        ttl: parameters.cache_ttl_seconds
+    });
+    const octokit = new cached_octokit_1.CachedOctokit(cache, {
+        auth: parameters.token,
+        log: console
+    });
+    return octokit;
 }
-async function get_repository_admins(octokit, org) {
+async function print_stale_repos(stale_repos) {
+    for (const repository of stale_repos) {
+        console.log(`# ${repository.name}`);
+        console.log(`_${repository.description}_`);
+        console.log(``);
+        console.log(`Last updated: ${repository.updatedAt}`);
+        console.log(`Last pushed: ${repository.pushedAt}`);
+        console.log(`Latest release: ${repository.latestRelease}`);
+        console.log('\n');
+        console.log(`Collaborators:`);
+        for (const collaborator of repository.affiliations) {
+            console.log(`* ${collaborator.login} (${collaborator.name}) <${collaborator.email}>` +
+                ` (${collaborator.permission}) via (${collaborator.affiliation})`);
+        }
+        console.log('\n');
+        console.log('\n\n');
+    }
+}
+async function get_organization_admins(octokit, org) {
     const { data: orgMembers } = await octokit.request_cached('GET /orgs/{org}/members', {
         org,
         role: 'admin'
@@ -40402,13 +40495,12 @@ async function get_repository_admins(octokit, org) {
             name: user.name ?? '',
             email: user.email ?? '',
             permission: 'admin',
-            affiliation: 'OWNER'
+            affiliation: 'organization admin'
         });
     }
     return admins;
 }
-async function get_stale_repos(octokit, org) {
-    const stale_date = one_year_ago();
+async function get_stale_repos(octokit, org, stale_date) {
     // Sanitize to avoid any kind of injection
     if (!org.match(/^[a-zA-Z0-9-]+$/)) {
         throw new Error(`Invalid org name: ${org}`);
@@ -42083,22 +42175,12 @@ exports.LRUCache = LRUCache;
 /******/ 	if (typeof __nccwpck_require__ !== 'undefined') __nccwpck_require__.ab = __dirname + "/";
 /******/ 	
 /************************************************************************/
-var __webpack_exports__ = {};
-// This entry need to be wrapped in an IIFE because it need to be in strict mode.
-(() => {
-"use strict";
-var exports = __webpack_exports__;
-
-Object.defineProperty(exports, "__esModule", ({ value: true }));
-/**
- * The entrypoint for the action.
- */
-const main_1 = __nccwpck_require__(70399);
-// eslint-disable-next-line @typescript-eslint/no-floating-promises
-(0, main_1.run)();
-
-})();
-
-module.exports = __webpack_exports__;
+/******/ 	
+/******/ 	// startup
+/******/ 	// Load entry module and return exports
+/******/ 	// This entry module is referenced by other modules so it can't be inlined
+/******/ 	var __webpack_exports__ = __nccwpck_require__(70399);
+/******/ 	module.exports = __webpack_exports__;
+/******/ 	
 /******/ })()
 ;

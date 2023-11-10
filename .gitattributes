@@ -1,1 +1,2 @@
+# Mark files as generated in Github PRs
 dist/** -diff linguist-generated=true

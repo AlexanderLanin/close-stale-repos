@@ -3,20 +3,40 @@ description: 'Identify stale repositories and report them'
 author: 'Alexander Lanin'
 
 inputs:
+  github-server-url:
+    description:
+      The base URL for the GitHub instance that you are trying to clone from,
+      will use environment defaults to fetch from the same instance that the
+      workflow is running from unless specified. Example URLs are
+      https://github.com or https://my-ghes-server.example.com
+    required: false
+
   organization:
-    description: 'Which organization to check; defaults to the current organization'
+    description: 'Which organization to check (default: current organization)'
     default: ${{ github.repository_owner }}
+
+  days_until_stale:
+    description:
+      'How many days since the last commit to consider the repository stale
+      (default: 365))'
+    default: 365
+
+  token:
+    description: 'Personal access token'
     required: true
 
-  milliseconds:
-    description: 'Your input description here'
-    required: true
-    default: '1000'
+  cache_path:
+    description:
+      'Path to the cache directory (Note: GitHub Actions will not persist this
+      directory)'
+    default: '.cache'
 
-# Define your outputs here.
+  cache_ttl_seconds:
+    description: 'How long to cache the results (default: 3600)'
+    default: 3600
+
 outputs:
-  time:
-    description: 'Your output description here'
+# currently none
 
 runs:
   using: node20

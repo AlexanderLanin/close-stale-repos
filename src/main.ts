@@ -3,6 +3,8 @@ import { CachedOctokit } from './cached-octokit'
 import assert from 'assert'
 import { Cache } from 'file-system-cache'
 import { Commit, Repository } from '@octokit/graphql-schema'
+import * as input_helper from './input-helper'
+import { IParameters } from './parameters'
 
 type AffiliatedUser = {
   login: string
@@ -27,64 +29,72 @@ type StaleRepository = {
  */
 export async function run(): Promise<void> {
   try {
-    // Note: when this runs as a GitHub Action, the .cache directory will not be persisted.
-    // This is to facilitate rapid iterations during development.
-    const cache = new Cache({
-      basePath: '.cache',
-      ns: 'close-stale-repos',
-      ttl: 3600 // 1 hour
-    })
+    const parameters = await input_helper.getInputs()
+    const octokit = await create_octokit(parameters)
 
-    const token = core.getInput('token')
-    const octokit = new CachedOctokit(cache, { auth: token, log: console })
-
-    const admins = await get_repository_admins(
+    const admins = await get_organization_admins(
       octokit,
-      'SoftwareDefinedVehicle'
+      parameters.organization
     )
     console.log(`Admins: ${admins.map(m => m.login).join(', ')}`)
 
-    const stale_repos = await get_stale_repos(octokit, 'SoftwareDefinedVehicle')
-    for (const repository of stale_repos) {
-      console.log(`# ${repository.name}`)
-      console.log(`_${repository.description}_`)
-      console.log(``)
-      console.log(`Last updated: ${repository.updatedAt}`)
-      console.log(`Last pushed: ${repository.pushedAt}`)
-      console.log(`Latest release: ${repository.latestRelease}`)
-
-      console.log('\n')
-      console.log(`Collaborators:`)
-      for (const collaborator of repository.affiliations) {
-        console.log(
-          `* ${collaborator.login} (${collaborator.name}) <${collaborator.email}>` +
-            ` (${collaborator.permission}) via (${collaborator.affiliation})`
-        )
-      }
-      console.log('\n')
-
-      console.log('\n\n')
-    }
+    const stale_repos = await get_stale_repos(
+      octokit,
+      parameters.organization,
+      parameters.stale_date
+    )
+    await print_stale_repos(stale_repos)
 
     octokit.print_cache_stats()
-
-    // Set outputs for other workflow steps to use
-    // core.setOutput('time', new Date().toTimeString())
   } catch (error) {
-    // Fail the workflow run if an error occurs
-    if (error instanceof Error) core.setFailed(error.message)
-    else core.setFailed('An unknown error occurred')
+    core.setFailed(`${(error as any)?.message ?? error}`)
   }
   return
 }
 
-function one_year_ago(): string {
-  const date = new Date()
-  date.setFullYear(date.getFullYear() - 1)
-  return date.toISOString().substring(0, 10)
+run()
+
+async function create_octokit(parameters: IParameters): Promise<CachedOctokit> {
+  // Note: when this runs as a GitHub Action, the cache directory will not be persisted.
+  // This is to facilitate rapid iterations during development.
+  const cache = new Cache({
+    basePath: parameters.cache_path,
+    ns: 'close-stale-repos',
+    ttl: parameters.cache_ttl_seconds
+  })
+
+  const octokit = new CachedOctokit(cache, {
+    auth: parameters.token,
+    log: console
+  })
+
+  return octokit
 }
 
-async function get_repository_admins(
+async function print_stale_repos(stale_repos: StaleRepository[]) {
+  for (const repository of stale_repos) {
+    console.log(`# ${repository.name}`)
+    console.log(`_${repository.description}_`)
+    console.log(``)
+    console.log(`Last updated: ${repository.updatedAt}`)
+    console.log(`Last pushed: ${repository.pushedAt}`)
+    console.log(`Latest release: ${repository.latestRelease}`)
+
+    console.log('\n')
+    console.log(`Collaborators:`)
+    for (const collaborator of repository.affiliations) {
+      console.log(
+        `* ${collaborator.login} (${collaborator.name}) <${collaborator.email}>` +
+          ` (${collaborator.permission}) via (${collaborator.affiliation})`
+      )
+    }
+    console.log('\n')
+
+    console.log('\n\n')
+  }
+}
+
+async function get_organization_admins(
   octokit: CachedOctokit,
   org: string
 ): Promise<AffiliatedUser[]> {
@@ -111,7 +121,7 @@ async function get_repository_admins(
       name: user.name ?? '',
       email: user.email ?? '',
       permission: 'admin',
-      affiliation: 'OWNER'
+      affiliation: 'organization admin'
     })
   }
 
@@ -120,10 +130,9 @@ async function get_repository_admins(
 
 async function get_stale_repos(
   octokit: CachedOctokit,
-  org: string
+  org: string,
+  stale_date: string
 ): Promise<StaleRepository[]> {
-  const stale_date = one_year_ago()
-
   // Sanitize to avoid any kind of injection
   if (!org.match(/^[a-zA-Z0-9-]+$/)) {
     throw new Error(`Invalid org name: ${org}`)
