@@ -40554,7 +40554,6 @@ function wrappy (fn, cb) {
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.CachedOctokit = void 0;
 const octokit_1 = __nccwpck_require__(57467);
-const console_1 = __nccwpck_require__(96206);
 class CachedOctokit extends octokit_1.Octokit {
     cache;
     extra_cache_keys;
@@ -40563,7 +40562,6 @@ class CachedOctokit extends octokit_1.Octokit {
     constructor(cache, octokit_options) {
         console.debug('creating CachedOctokit');
         super(octokit_options);
-        (0, console_1.assert)(super.request);
         this.cache = cache;
         this.extra_cache_keys = JSON.stringify(octokit_options || []);
         this.hits = 0;
@@ -40583,13 +40581,12 @@ class CachedOctokit extends octokit_1.Octokit {
         else {
             this.misses += 1;
             // we need to await the result to ensure that the cache is populated
-            const live_data = await super.graphql(query, parameters);
+            const live_data = await this.graphql(query, parameters);
             this.cache.set(cache_key, live_data, retention_in_seconds);
             return live_data;
         }
     }
-    async request_cached(route, options, retention_in_seconds = 3600) {
-        (0, console_1.assert)(super.request);
+    async request_cached(route, options = undefined, retention_in_seconds = 3600) {
         const cache_key = JSON.stringify({
             route,
             options,
@@ -40598,13 +40595,12 @@ class CachedOctokit extends octokit_1.Octokit {
         const cached_data = await this.cache.get(cache_key);
         if (cached_data) {
             this.hits += 1;
-            console.debug(`cache hit: ${route} ${JSON.stringify(options)}`);
             return cached_data;
         }
         else {
             this.misses += 1;
             // we need to await the result to ensure that the cache is populated
-            const live_data = await super.request(route, options);
+            const live_data = await this.request(route, options);
             await this.cache.set(cache_key, live_data, retention_in_seconds);
             return live_data;
         }
@@ -40618,6 +40614,63 @@ class CachedOctokit extends octokit_1.Octokit {
     }
 }
 exports.CachedOctokit = CachedOctokit;
+
+
+/***/ }),
+
+/***/ 53272:
+/***/ ((__unused_webpack_module, exports) => {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.add_unique_user = exports.merge_user_infos = void 0;
+function merge_single_entry(a, b) {
+    if (a == b || (a && !b)) {
+        return a;
+    }
+    else if (b && !a) {
+        return b;
+    }
+    else {
+        return `${a}, ${b}`;
+    }
+}
+function merge_user_infos(in_out, in_) {
+    in_out.login = merge_single_entry(in_out.login, in_.login);
+    in_out.name = merge_single_entry(in_out.name, in_.name);
+    in_out.email = merge_single_entry(in_out.email, in_.email);
+    // ToDo: handle multiple affiliations without duplicating the string
+    in_out.affiliation = merge_single_entry(in_out.affiliation, in_.affiliation);
+}
+exports.merge_user_infos = merge_user_infos;
+function add_unique_user(users, user) {
+    if (!user.login) {
+        // if email contains users.noreply.github.com, extract the username
+        // The syntax is: <noise>+<github_username>@users.noreply.github.com
+        const match = user.email.match(/(.*)\+([^@]*)@users.noreply.github.com/);
+        if (match) {
+            user.login = match[2];
+            user.email = ''; // remove the fake email
+        }
+    }
+    // remove useless noise from the name
+    if (user.name == user.login) {
+        user.name = '';
+    }
+    const match = users.find(u => (user.login && u.login === user.login) ||
+        (user.email &&
+            user.name &&
+            u.email === user.email &&
+            u.name === user.name));
+    if (match) {
+        merge_user_infos(match, user);
+    }
+    else {
+        users.push(user);
+    }
+}
+exports.add_unique_user = add_unique_user;
 
 
 /***/ }),
@@ -40654,7 +40707,7 @@ Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.getInputs = exports.parseInputs = void 0;
 const core = __importStar(__nccwpck_require__(42186));
 (__nccwpck_require__(12437).config)();
-async function parseInputs(inputs) {
+function parseInputs(inputs) {
     const result = {};
     result.github_server = parse_url(inputs.github_server);
     result.organization = parse_simple_string(inputs.organization);
@@ -40668,7 +40721,7 @@ async function parseInputs(inputs) {
     return result;
 }
 exports.parseInputs = parseInputs;
-async function getInputs() {
+function getInputs() {
     const result = {};
     result.github_server = get('github-server-url');
     result.organization = get('organization', '', 'GITHUB_REPOSITORY_OWNER');
@@ -40781,24 +40834,29 @@ const cached_octokit_1 = __nccwpck_require__(27068);
 const assert_1 = __importDefault(__nccwpck_require__(39491));
 const file_system_cache_1 = __nccwpck_require__(47232);
 const input_helper = __importStar(__nccwpck_require__(46455));
+const data = __importStar(__nccwpck_require__(53272));
 /**
  * The main function for the action.
  * @returns {Promise<void>} Resolves when the action is complete.
  */
 async function run() {
     try {
-        const parameters = await input_helper.parseInputs(await input_helper.getInputs());
+        const parameters = input_helper.parseInputs(input_helper.getInputs());
         const octokit = await create_octokit(parameters);
-        (0, assert_1.default)(octokit.request, 'octokit.request is undefined (1)');
         const admins = await get_organization_admins(octokit, parameters.organization);
         console.log(`Admins: ${admins.map(m => m.login).join(', ')}`);
         const stale_repos = await get_stale_repos(octokit, parameters.organization, parameters.stale_date);
-        await print_stale_repos(stale_repos);
+        console.log('| Repository | Description | Last updated | Collaborators |');
+        console.log('| ---------- | ----------- | ------------ | ------------- |');
+        await print_stale_repos_table(stale_repos);
         octokit.print_cache_stats();
     }
     catch (error) {
         if (error instanceof Error) {
             core.setFailed('Error: ' + error.message);
+            if ('status' in error) {
+                console.log('Status: ' + error.status);
+            }
             console.log(error.stack);
         }
         else {
@@ -40821,55 +40879,69 @@ async function create_octokit(parameters) {
         auth: parameters.token,
         log: console
     });
-    (0, assert_1.default)(octokit.request, 'octokit.request is undefined');
+    console.debug('Authenticating...');
+    await octokit.auth();
+    console.debug('Authenticated.');
     return octokit;
 }
-async function print_stale_repos(stale_repos) {
+async function print_stale_repos_list(stale_repos) {
     for (const repository of stale_repos) {
         console.log(`# ${repository.name}`);
         console.log(`_${repository.description}_`);
         console.log(``);
         console.log(`Last updated: ${repository.updatedAt}`);
-        console.log(`Last pushed: ${repository.pushedAt}`);
-        console.log(`Latest release: ${repository.latestRelease}`);
         console.log('\n');
         console.log(`Collaborators:`);
         for (const collaborator of repository.affiliations) {
-            console.log(`* ${collaborator.login} (${collaborator.name}) <${collaborator.email}>` +
-                ` (${collaborator.permission}) via (${collaborator.affiliation})`);
+            const full_name = collaborator.login && collaborator.name
+                ? `${collaborator.name} (@${collaborator.login})`
+                : collaborator.login
+                    ? collaborator.login
+                    : collaborator.name;
+            const opt_email = collaborator.email ? ` <${collaborator.email}>` : '';
+            console.log(`* ${full_name} ${opt_email} (${collaborator.affiliation})`);
         }
         console.log('\n');
         console.log('\n\n');
     }
 }
+async function print_stale_repos_table(stale_repos) {
+    for (const repository of stale_repos) {
+        const last_updated = repository.updatedAt?.substring(0, 10);
+        let str = `| ${repository.name} | ${repository.description} | ${last_updated} | `;
+        for (const collaborator of repository.affiliations) {
+            const full_name = collaborator.login && collaborator.name
+                ? `${collaborator.name} (@${collaborator.login})`
+                : collaborator.login
+                    ? collaborator.login
+                    : collaborator.name;
+            const opt_email = collaborator.email ? ` <${collaborator.email}>` : '';
+            str += `* ${full_name} ${opt_email} (${collaborator.affiliation})<br />`;
+        }
+        console.log(str + ' |');
+    }
+}
 async function get_organization_admins(octokit, org) {
-    const { data: orgMembers } = await octokit.request_cached('GET /orgs/{org}/members', {
-        org,
+    const { data: orgMembers } = await octokit.request_cached(`GET /orgs/${org}/members`, {
         role: 'admin'
     });
     const admins = [];
+    // Get the user details for each member
+    console.log("Getting admins' details...");
+    if (orgMembers.length > 10)
+        console.log(`${orgMembers.length} admins. This may take a while...`);
     for (const member of orgMembers) {
-        const { data: user } = await octokit.request_cached('GET /users/{username}', {
-            username: member.login
-        });
+        const { data: user } = await octokit.request_cached(`GET /users/${member.login}`);
         admins.push({
             login: user.login,
             name: user.name ?? '',
             email: user.email ?? '',
-            permission: 'admin',
             affiliation: 'organization admin'
         });
     }
     return admins;
 }
 async function get_stale_repos(octokit, org, stale_date) {
-    // Sanitize to avoid any kind of injection
-    if (!org.match(/^[a-zA-Z0-9-]+$/)) {
-        throw new Error(`Invalid org name: ${org}`);
-    }
-    if (!stale_date.match(/^\d{4}-\d{2}-\d{2}$/)) {
-        throw new Error(`Invalid stale date: ${stale_date}`);
-    }
     const search_query = `org:${org} pushed:<${stale_date}`;
     const graphql_query = `
   query stale_repos($search_query: String!, $limit: Int!) {
@@ -40928,44 +41000,53 @@ async function get_stale_repos(octokit, org, stale_date) {
   `;
     const graph = await octokit.graphql_cached(graphql_query, {
         search_query,
-        limit: 15
+        limit: 50
     });
     const stale_repos = [];
     for (const edge of graph.search.edges) {
-        stale_repos.push(extract_stale_repository_data(edge.node));
+        const data = extract_stale_repository_data(edge.node);
+        if (data)
+            stale_repos.push(data);
     }
     return stale_repos;
 }
+function getLexicographicallyLargestString(a, b, c) {
+    let largest = a;
+    if (b !== undefined && (largest === undefined || b > largest)) {
+        largest = b;
+    }
+    if (c !== undefined && (largest === undefined || c > largest)) {
+        largest = c;
+    }
+    return largest;
+}
 function extract_stale_repository_data(repository) {
-    assert_1.default.strictEqual(repository.isArchived, false, `Repository ${repository.name} is archived`);
+    if (repository.isArchived)
+        return undefined;
     assert_1.default.strictEqual(repository.isDisabled, false, `Repository ${repository.name} is disabled`);
     const stale_repo = {
         name: repository.name,
         description: repository.description || '',
-        updatedAt: repository.updatedAt,
-        pushedAt: repository.pushedAt,
-        latestRelease: repository.latestRelease?.createdAt,
+        updatedAt: getLexicographicallyLargestString(repository.latestRelease?.createdAt, repository.updatedAt, repository.pushedAt),
         affiliations: []
     };
     for (const commit of repository.defaultBranchRef?.target?.history
         ?.nodes || []) {
-        if (commit?.author?.user) {
-            stale_repo.affiliations.push({
-                login: commit.author.user.login,
-                name: commit.author.user.name ?? '',
-                email: commit.author.user.email,
-                permission: '',
+        if (commit?.author) {
+            data.add_unique_user(stale_repo.affiliations, {
+                login: commit.author.user?.login ?? '',
+                name: commit.author.user?.name ?? commit.author.name ?? '',
+                email: commit.author.user?.email ?? commit.author.email ?? '',
                 affiliation: 'recent commiter'
             });
         }
     }
     for (const collaborator of repository.collaborators?.edges || []) {
         if (collaborator) {
-            stale_repo.affiliations.push({
+            data.add_unique_user(stale_repo.affiliations, {
                 login: collaborator.node.login,
                 name: collaborator.node.name ?? '',
                 email: collaborator.node.email ?? '',
-                permission: collaborator.permission ?? '',
                 affiliation: 'collaborator'
             });
         }
@@ -40989,14 +41070,6 @@ module.exports = require("assert");
 
 "use strict";
 module.exports = require("buffer");
-
-/***/ }),
-
-/***/ 96206:
-/***/ ((module) => {
-
-"use strict";
-module.exports = require("console");
 
 /***/ }),
 

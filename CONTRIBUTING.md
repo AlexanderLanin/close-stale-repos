@@ -22,5 +22,5 @@ npm run test
 
 ### Running:
 ```bash
-npm run run
+npm run local
 ```

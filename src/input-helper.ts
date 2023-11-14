@@ -3,9 +3,7 @@ import { IParameters } from './parameters'
 
 require('dotenv').config()
 
-export async function parseInputs(
-  inputs: IRawParameters
-): Promise<IParameters> {
+export function parseInputs(inputs: IRawParameters): IParameters {
   const result = {} as unknown as IParameters
 
   result.github_server = parse_url(inputs.github_server)
@@ -38,7 +36,7 @@ export interface IRawParameters {
   cache_ttl_seconds: KeyValuePair
 }
 
-export async function getInputs(): Promise<IRawParameters> {
+export function getInputs(): IRawParameters {
   const result = {} as unknown as IRawParameters
 
   result.github_server = get('github-server-url')

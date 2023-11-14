@@ -13,7 +13,7 @@ export class CachedOctokit extends Octokit {
   constructor(cache: Cache, octokit_options: OctokitOptions) {
     console.debug('creating CachedOctokit')
     super(octokit_options)
-    assert(super.request)
+
     this.cache = cache
     this.extra_cache_keys = JSON.stringify(octokit_options || [])
 
@@ -35,13 +35,12 @@ export class CachedOctokit extends Octokit {
     const cached_data = await this.cache.get(cache_key)
     if (cached_data) {
       this.hits += 1
-
       return cached_data
     } else {
       this.misses += 1
 
       // we need to await the result to ensure that the cache is populated
-      const live_data = await super.graphql(query, parameters)
+      const live_data = await this.graphql(query, parameters)
       this.cache.set(cache_key, live_data, retention_in_seconds)
       return live_data
     }
@@ -49,11 +48,9 @@ export class CachedOctokit extends Octokit {
 
   async request_cached(
     route: string,
-    options: RequestParameters | undefined,
+    options: RequestParameters | undefined = undefined,
     retention_in_seconds = 3600
   ): Promise<any> {
-    assert(super.request)
-
     const cache_key = JSON.stringify({
       route,
       options,
@@ -63,13 +60,12 @@ export class CachedOctokit extends Octokit {
     const cached_data = await this.cache.get(cache_key)
     if (cached_data) {
       this.hits += 1
-      console.debug(`cache hit: ${route} ${JSON.stringify(options)}`)
       return cached_data
     } else {
       this.misses += 1
 
       // we need to await the result to ensure that the cache is populated
-      const live_data = await super.request(route, options)
+      const live_data = await this.request(route, options)
       await this.cache.set(cache_key, live_data, retention_in_seconds)
       return live_data
     }

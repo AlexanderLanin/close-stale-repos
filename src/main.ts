@@ -5,23 +5,8 @@ import { Cache } from 'file-system-cache'
 import { Commit, Repository } from '@octokit/graphql-schema'
 import * as input_helper from './input-helper'
 import { IParameters } from './parameters'
-
-type AffiliatedUser = {
-  login: string
-  name: string
-  email: string
-  permission: string
-  affiliation: string
-}
-
-type StaleRepository = {
-  name: string
-  description: string
-  updatedAt: string
-  pushedAt: string
-  latestRelease: string
-  affiliations: AffiliatedUser[]
-}
+import { maxHeaderSize } from 'http'
+import * as data from './data-types'
 
 /**
  * The main function for the action.
@@ -29,11 +14,8 @@ type StaleRepository = {
  */
 export async function run(): Promise<void> {
   try {
-    const parameters = await input_helper.parseInputs(
-      await input_helper.getInputs()
-    )
+    const parameters = input_helper.parseInputs(input_helper.getInputs())
     const octokit = await create_octokit(parameters)
-    assert(octokit.request, 'octokit.request is undefined (1)')
 
     const admins = await get_organization_admins(
       octokit,
@@ -46,12 +28,17 @@ export async function run(): Promise<void> {
       parameters.organization,
       parameters.stale_date
     )
-    await print_stale_repos(stale_repos)
+    console.log('| Repository | Description | Last updated | Collaborators |')
+    console.log('| ---------- | ----------- | ------------ | ------------- |')
+    await print_stale_repos_table(stale_repos)
 
     octokit.print_cache_stats()
   } catch (error) {
     if (error instanceof Error) {
       core.setFailed('Error: ' + error.message)
+      if ('status' in error) {
+        console.log('Status: ' + error.status)
+      }
       console.log(error.stack)
     } else {
       core.setFailed('Error: ' + (error as string))
@@ -76,26 +63,33 @@ async function create_octokit(parameters: IParameters): Promise<CachedOctokit> {
     log: console
   })
 
-  assert(octokit.request, 'octokit.request is undefined')
+  console.debug('Authenticating...')
+  await octokit.auth()
+  console.debug('Authenticated.')
+
   return octokit
 }
 
-async function print_stale_repos(stale_repos: StaleRepository[]) {
+async function print_stale_repos_list(stale_repos: data.StaleRepository[]) {
   for (const repository of stale_repos) {
     console.log(`# ${repository.name}`)
     console.log(`_${repository.description}_`)
     console.log(``)
     console.log(`Last updated: ${repository.updatedAt}`)
-    console.log(`Last pushed: ${repository.pushedAt}`)
-    console.log(`Latest release: ${repository.latestRelease}`)
 
     console.log('\n')
     console.log(`Collaborators:`)
     for (const collaborator of repository.affiliations) {
-      console.log(
-        `* ${collaborator.login} (${collaborator.name}) <${collaborator.email}>` +
-          ` (${collaborator.permission}) via (${collaborator.affiliation})`
-      )
+      const full_name =
+        collaborator.login && collaborator.name
+          ? `${collaborator.name} (@${collaborator.login})`
+          : collaborator.login
+          ? collaborator.login
+          : collaborator.name
+
+      const opt_email = collaborator.email ? ` <${collaborator.email}>` : ''
+
+      console.log(`* ${full_name} ${opt_email} (${collaborator.affiliation})`)
     }
     console.log('\n')
 
@@ -103,33 +97,54 @@ async function print_stale_repos(stale_repos: StaleRepository[]) {
   }
 }
 
+async function print_stale_repos_table(stale_repos: data.StaleRepository[]) {
+  for (const repository of stale_repos) {
+    const last_updated = repository.updatedAt?.substring(0, 10)
+    let str = `| ${repository.name} | ${repository.description} | ${last_updated} | `
+
+    for (const collaborator of repository.affiliations) {
+      const full_name =
+        collaborator.login && collaborator.name
+          ? `${collaborator.name} (@${collaborator.login})`
+          : collaborator.login
+          ? collaborator.login
+          : collaborator.name
+
+      const opt_email = collaborator.email ? ` <${collaborator.email}>` : ''
+
+      str += `* ${full_name} ${opt_email} (${collaborator.affiliation})<br />`
+    }
+    console.log(str + ' |')
+  }
+}
+
 async function get_organization_admins(
   octokit: CachedOctokit,
   org: string
-): Promise<AffiliatedUser[]> {
+): Promise<data.AffiliatedUser[]> {
   const { data: orgMembers } = await octokit.request_cached(
-    'GET /orgs/{org}/members',
+    `GET /orgs/${org}/members`,
     {
-      org,
       role: 'admin'
     }
   )
 
-  const admins: AffiliatedUser[] = []
+  const admins: data.AffiliatedUser[] = []
+
+  // Get the user details for each member
+  console.log("Getting admins' details...")
+  if (orgMembers.length > 10)
+    console.log(`${orgMembers.length} admins. This may take a while...`)
 
   for (const member of orgMembers) {
     const { data: user } = await octokit.request_cached(
-      'GET /users/{username}',
-      {
-        username: member.login
-      }
+      `GET /users/${member.login}`
     )
 
     admins.push({
       login: user.login,
       name: user.name ?? '',
       email: user.email ?? '',
-      permission: 'admin',
       affiliation: 'organization admin'
     })
   }
@@ -141,16 +156,7 @@ async function get_stale_repos(
   octokit: CachedOctokit,
   org: string,
   stale_date: string
-): Promise<StaleRepository[]> {
-  // Sanitize to avoid any kind of injection
-  if (!org.match(/^[a-zA-Z0-9-]+$/)) {
-    throw new Error(`Invalid org name: ${org}`)
-  }
-
-  if (!stale_date.match(/^\d{4}-\d{2}-\d{2}$/)) {
-    throw new Error(`Invalid stale date: ${stale_date}`)
-  }
-
+): Promise<data.StaleRepository[]> {
   const search_query = `org:${org} pushed:<${stale_date}`
 
   const graphql_query = `
@@ -210,47 +216,63 @@ async function get_stale_repos(
   `
   const graph = await octokit.graphql_cached(graphql_query, {
     search_query,
-    limit: 15
+    limit: 50
   })
 
-  const stale_repos: StaleRepository[] = []
+  const stale_repos: data.StaleRepository[] = []
   for (const edge of graph.search.edges) {
-    stale_repos.push(extract_stale_repository_data(edge.node))
+    const data = extract_stale_repository_data(edge.node)
+    if (data) stale_repos.push(data)
   }
   return stale_repos
 }
 
+function getLexicographicallyLargestString(
+  a: string | undefined,
+  b: string | undefined,
+  c: string | undefined
+): string | undefined {
+  let largest = a
+
+  if (b !== undefined && (largest === undefined || b > largest)) {
+    largest = b
+  }
+  if (c !== undefined && (largest === undefined || c > largest)) {
+    largest = c
+  }
+
+  return largest
+}
+
 function extract_stale_repository_data(
   repository: Repository
-): StaleRepository {
-  assert.strictEqual(
-    repository.isArchived,
-    false,
-    `Repository ${repository.name} is archived`
-  )
+): data.StaleRepository | undefined {
+  if (repository.isArchived) return undefined
+
   assert.strictEqual(
     repository.isDisabled,
     false,
     `Repository ${repository.name} is disabled`
   )
 
-  const stale_repo: StaleRepository = {
+  const stale_repo: data.StaleRepository = {
     name: repository.name,
     description: repository.description || '',
-    updatedAt: repository.updatedAt,
-    pushedAt: repository.pushedAt,
-    latestRelease: repository.latestRelease?.createdAt,
+    updatedAt: getLexicographicallyLargestString(
+      repository.latestRelease?.createdAt,
+      repository.updatedAt,
+      repository.pushedAt
+    ),
     affiliations: []
   }
 
   for (const commit of (repository.defaultBranchRef?.target as Commit)?.history
     ?.nodes || []) {
-    if (commit?.author?.user) {
-      stale_repo.affiliations.push({
-        login: commit.author.user.login,
-        name: commit.author.user.name ?? '',
-        email: commit.author.user.email,
-        permission: '',
+    if (commit?.author) {
+      data.add_unique_user(stale_repo.affiliations, {
+        login: commit.author.user?.login ?? '',
+        name: commit.author.user?.name ?? commit.author.name ?? '',
+        email: commit.author.user?.email ?? commit.author.email ?? '',
         affiliation: 'recent commiter'
       })
     }
@@ -258,11 +280,10 @@ function extract_stale_repository_data(
 
   for (const collaborator of repository.collaborators?.edges || []) {
     if (collaborator) {
-      stale_repo.affiliations.push({
+      data.add_unique_user(stale_repo.affiliations, {
         login: collaborator.node.login,
         name: collaborator.node.name ?? '',
         email: collaborator.node.email ?? '',
-        permission: collaborator.permission ?? '',
         affiliation: 'collaborator'
       })
     }
