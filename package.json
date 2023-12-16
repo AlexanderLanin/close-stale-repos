@@ -63,7 +63,7 @@
     "@octokit/graphql-schema": "github:octokit/graphql-schema",
     "dotenv": "^16.3.1",
     "file-system-cache": "^2.4.4",
-    "octokit": "^3.1.1"
+    "octokit": "^3.1.2"
   },
   "devDependencies": {
     "@types/jest": "^29.5.6",
